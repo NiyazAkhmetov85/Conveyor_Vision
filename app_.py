@@ -1,84 +1,72 @@
 import streamlit as st
-import cv2
 import numpy as np
 from ultralytics import YOLO
-from PIL import Image
-from model_information import ModelInfo
+from PIL import Image, ImageDraw, ImageFont
+import tempfile
+import os
 
-# Настройки приложения
+# Настройки интерфейса
 st.set_page_config(page_title="Conveyor Vision", layout="centered")
 
 # Загрузка модели
-MODEL_PATH = "C:/ConveyorVision/runs/detect/train5/weights/best.pt"
+MODEL_PATH = "runs/detect/train5/weights/best.pt"  # Укажи путь, если модель лежит в другом месте
 model = YOLO(MODEL_PATH)
 
-# Функция детекции
+# Обработка изображения через YOLO
 def detect_objects(image):
-    """Обрабатывает изображение через YOLO и возвращает результаты."""
     results = model(image)
     return results
 
-# Функция отрисовки результатов
-def draw_results(image, results):
-    """Отрисовывает предсказанные объекты и возвращает изображение."""
-    img = np.array(image)
+# Отрисовка результатов через PIL
+def draw_results_pil(image, results):
+    img = image.copy().convert("RGB")
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default()
     damage_detected = False
-    
+
     for result in results:
         for box in result.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
             conf = box.conf[0].item()
             cls = int(box.cls[0].item())
             label = f"{model.names[cls]}: {conf:.2f}"
-            
-            # Определяем цвет в зависимости от класса
-            if cls == 0:  # "Bad" (повреждение)
-                color = (0, 0, 255)  # Красный
-                damage_detected = True
-            else:  # "Good" (норма)
-                color = (0, 255, 0)  # Зеленый
 
-            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-    
+            if cls == 0:
+                color = (255, 0, 0)  # Красный для "Bad"
+                damage_detected = True
+            else:
+                color = (0, 255, 0)  # Зелёный для "Good"
+
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=2)
+            draw.text((x1, y1 - 10), label, fill=color, font=font)
+
     return img, damage_detected
 
-# Заголовок приложения
-st.markdown("<h1 style='text-align: center;'> Conveyor Vision</h1>", unsafe_allow_html=True)
-st.markdown("<h3 style='text-align: center;'>Автоматическое обнаружение повреждений конвейерной ленты</h3>", unsafe_allow_html=True)
+# Заголовки
+st.title("🔍 Conveyor Vision")
+st.markdown("Автоматическое определение повреждений конвейерной ленты")
 
-# Форма загрузки изображения
-uploaded_file = st.file_uploader("🔹 **Выберите изображение**", type=["jpg", "png", "jpeg"])
+# Загрузка изображения
+uploaded_file = st.file_uploader("Выберите изображение", type=["jpg", "jpeg", "png"])
 
 if uploaded_file:
     image = Image.open(uploaded_file)
-    st.image(image, caption="📷 Загруженное изображение", use_container_width=True)
+    st.image(image, caption="Загруженное изображение", use_container_width=True)
 
-    if st.button("🔍 Запустить детекцию"):
-        with st.spinner("⏳ Анализ изображения..."):
+    if st.button("Запустить детекцию"):
+        with st.spinner("Анализ изображения..."):
             results = detect_objects(image)
-            output_img, damage_detected = draw_results(image, results)
-        
-        st.image(output_img, caption="Результат детекции", use_container_width=True)
+            output_img, damage_detected = draw_results_pil(image, results)
 
-        # Вывод сообщения в зависимости от наличия повреждений
+        st.image(output_img, caption="Результат", use_container_width=True)
+
         if damage_detected:
-            st.error(" **Обнаружено повреждение ленты!**", icon="🚨")
+            st.error("🚨 Обнаружено повреждение ленты!")
         else:
-            st.success(" **Лента в нормальном состоянии.**", icon="🟢")
+            st.success("🟢 Повреждений не обнаружено")
 
-# Инициализация состояния кнопки
-if "show_model_info" not in st.session_state:
-    st.session_state.show_model_info = False
-
-# Обработчик нажатия кнопки
-if st.button("ℹ️ Информация о модели"):
-    st.session_state.show_model_info = not st.session_state.show_model_info
-
-# Отображение или скрытие информации о модели
-if st.session_state.show_model_info:
-    model_info = ModelInfo()
-    info = model_info.info
-    st.markdown("### Информация о модели")
-    for key, value in info.items():
-        st.write(f"**{key}**: {value}")
+        # Скачивание
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            output_img.save(tmp.name)
+            st.download_button("💾 Скачать изображение", data=open(tmp.name, "rb"), file_name="result.png", mime="image/png")
+            os.unlink(tmp.name)
